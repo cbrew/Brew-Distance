@@ -23,19 +23,38 @@ import sys
 
 # Public symbols
 __all__ = ("distance", "BrewDistanceException")
-__author__ = "David H. Gutteridge"
-__version__ = "1.0.1"
+__author__ = "David H. Gutteridge and Chris Brew"
+__version__ = "1.0.2"
+
+from dataclasses import dataclass
+
+from enum import Enum
+from typing import List, Optional, NamedTuple, Union, Tuple
+
 
 class BrewDistanceException(Exception):
     """Brew-Distance-specific exception used with argument validation."""
 
     pass
 
-# Traceback structure
-_Traceback = namedtuple("_Traceback", "cost move traceback")
 
-def _best(sub_move, ins_move, del_move):
+class Move(Enum):
+    MATCH = 0
+    INS = 1
+    DEL = 2
+    SUBST = 3
+    INITIAL = 4
+
+
+class Traceback(NamedTuple):
+    cost: int
+    move: Move
+    traceback: Optional["Traceback"]
+
+
+def _best(sub_move: Traceback, ins_move: Traceback, del_move: Traceback):
     """Determine the optimum edit."""
+
     (increment, move1, traceback1) = sub_move
     cost_with_sub = increment + traceback1.cost
 
@@ -62,27 +81,30 @@ def _best(sub_move, ins_move, del_move):
     # This is predicated on match having a lower cost than other
     # operations, and so doesn't necessarily work if that doesn't hold.
     if best_cost == traceback.cost:
-        move = "MATCH"
+        move = Move.MATCH
 
-    return _Traceback(best_cost, move, traceback)
+    return Traceback(best_cost, move, traceback)
 
-def _edit_path(string1, string2, cost):
+
+def _edit_path(string1, string2, cost) -> Traceback:
     """Determine the transformations required to make the first string the same as the second."""
     len1 = len(string1)
     len2 = len(string2)
-    (match_cost, ins_cost, del_cost, subst_cost) = cost
+    (match_cost, ins_cost, del_cost, subst_cost,initial_cost) = (cost[m] for m in Move)
     distances = dict()
-    distances[0, 0] = _Traceback(0, "INITIAL", None)
+    distances[0, 0] = Traceback(cost=initial_cost, move=Move.INITIAL, traceback=None)
 
     # Deletions
     for i in range(0, len1):
         so_far = distances[i, 0].cost
-        distances[i + 1, 0] = _Traceback(so_far + del_cost, "DEL", distances[i, 0])
+        distances[i + 1, 0] = Traceback(
+            cost=so_far + del_cost, move=Move.DEL, traceback=distances[i, 0]
+        )
 
     # Insertions
     for j in range(0, len2):
         so_far = distances[0, j].cost
-        distances[0, j + 1] = _Traceback(so_far + ins_cost, "INS", distances[0, j])
+        distances[0, j + 1] = Traceback(so_far + ins_cost, Move.INS, distances[0, j])
 
     # Substitutions
     for i in range(0, len1):
@@ -92,13 +114,16 @@ def _edit_path(string1, string2, cost):
             else:
                 subst = subst_cost
 
-            distances[i + 1, j + 1] = _best(_Traceback(subst, "SUBST", distances[i, j]),
-                                            _Traceback(ins_cost, "INS", distances[i + 1, j]),
-                                            _Traceback(del_cost, "DEL", distances[i, j + 1]))
+            distances[i + 1, j + 1] = _best(
+                Traceback(subst, Move.SUBST if subst else Move.MATCH, distances[i, j]),
+                Traceback(ins_cost, Move.INS, distances[i + 1, j]),
+                Traceback(del_cost, Move.DEL, distances[i, j + 1]),
+            )
 
     return distances[len1, len2]
 
-def _list_edits(raw_edits):
+
+def _list_edits(raw_edits: Traceback) -> List[Move]:
     """Create a list of the edits made."""
     just_edits = list()
 
@@ -109,7 +134,13 @@ def _list_edits(raw_edits):
 
     return just_edits
 
-def distance(string1, string2, output="both", cost=(0, 1, 1, 1)):
+
+def distance(
+    string1: str,
+    string2: str,
+    output="both",
+    cost={Move.MATCH: 0, Move.INS: 1, Move.DEL: 1, Move.SUBST: 1, Move.INITIAL:0},
+) -> Union[int, List[Move], Tuple[int, List[Move]]]:
     """Determine the weighted edit distance between two strings.
 
     string1 is the string to be transformed.
@@ -130,24 +161,17 @@ def distance(string1, string2, output="both", cost=(0, 1, 1, 1)):
         "both: provides a tuple containing the output of both
         previous options.
     """
-    if sys.hexversion >= 0x03000000:
-        if not isinstance(string1, str) or not isinstance(string2, str):
-            raise BrewDistanceException("Brew-Distance: non-string input supplied.")
-    else:
-        if not isinstance(string1, basestring) or not isinstance(string2, basestring):
-            raise BrewDistanceException("Brew-Distance: non-string input supplied.")
-
-        if not isinstance(string1, unicode):
-            string1 = string1.decode("utf-8")
-
-        if not isinstance(string2, unicode):
-            string2 = string2.decode("utf-8")
+    if not isinstance(string1, str) or not isinstance(string2, str):
+        raise BrewDistanceException("Brew-Distance: non-string input supplied.")
 
     if output != "both" and output != "distance" and output != "edits":
         raise BrewDistanceException("Brew-Distance: invalid output parameter supplied.")
-    elif (not isinstance(cost, tuple) or len(cost) != 4 or
-          not isinstance(cost[0], numbers.Real) or not isinstance(cost[1], numbers.Real) or
-          not isinstance(cost[2], numbers.Real) or not isinstance(cost[3], numbers.Real)):
+    elif (
+        not isinstance(cost[Move.MATCH], numbers.Real)
+        or not isinstance(cost[Move.INS], numbers.Real)
+        or not isinstance(cost[Move.DEL], numbers.Real)
+        or not isinstance(cost[Move.SUBST], numbers.Real)
+    ):
         raise BrewDistanceException("Brew-Distance: invalid cost parameter supplied.")
     else:
         results = _edit_path(string1, string2, cost)
@@ -159,6 +183,8 @@ def distance(string1, string2, output="both", cost=(0, 1, 1, 1)):
         else:
             return (results[0], _list_edits(results))
 
+
 if __name__ == "__main__":
     print("Brew-Distance: determining results for 'foo' vs. 'fou':")
     print(str(distance("foo", "fou", "both")))
+
